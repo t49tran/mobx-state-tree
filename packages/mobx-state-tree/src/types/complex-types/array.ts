@@ -1,47 +1,66 @@
 import {
-    observable,
-    IObservableArray,
-    IArrayWillChange,
-    IArrayWillSplice,
+    _getAdministration,
+    action,
     IArrayChange,
     IArraySplice,
-    action,
+    IArrayWillChange,
+    IArrayWillSplice,
     intercept,
-    observe,
-    _getAdministration
+    IObservableArray,
+    observable,
+    observe
 } from "mobx"
 import {
+    ComplexType,
+    convertChildNodesToArray,
     createNode,
-    getStateTreeNode,
-    IJsonPatch,
-    INode,
-    isStateTreeNode,
-    IStateTreeNode,
-    isNode,
-    typecheck,
+    EMPTY_ARRAY,
+    fail,
     flattenTypeErrors,
     getContextForPath,
-    IContext,
-    IValidationResult,
-    typeCheckFailure,
-    ComplexType,
-    IComplexType,
-    IType,
-    isType,
-    fail,
-    isMutable,
-    isArray,
-    isPlainObject,
-    TypeFlags,
-    ObjectNode,
-    mobxShallow,
-    IChildNodesMap,
-    convertChildNodesToArray,
+    getStateTreeNode,
     IAnyType,
-    EMPTY_ARRAY
+    IChildNodesMap,
+    IComplexType,
+    IContext,
+    IJsonPatch,
+    INode,
+    isArray,
+    isMutable,
+    isNode,
+    isPlainObject,
+    isStateTreeNode,
+    IStateTreeNode,
+    isType,
+    IType,
+    IValidationResult,
+    mobxShallow,
+    ObjectNode,
+    typecheckInternal,
+    typeCheckFailure,
+    TypeFlags,
+    OptionalProperty,
+    ExtractS,
+    ExtractC,
+    ExtractT
 } from "../../internal"
 
-export class ArrayType<C, S, T> extends ComplexType<C[], S[], IObservableArray<T>> {
+export interface IMSTArray<T> extends IObservableArray<T> {}
+
+export interface IArrayType<IT extends IAnyType>
+    extends IComplexType<ExtractC<IT>[] | undefined, ExtractS<IT>[], IMSTArray<ExtractT<IT>>>,
+        OptionalProperty {}
+
+/**
+ * @internal
+ * @private
+ */
+export class ArrayType<
+    IT extends IAnyType,
+    C = ExtractC<IT>,
+    S = ExtractS<IT>,
+    T = ExtractT<IT>
+> extends ComplexType<C[] | undefined, S[], IMSTArray<T>> {
     shouldAttachNode = true
     subType: IAnyType
     readonly flags = TypeFlags.Array
@@ -51,33 +70,8 @@ export class ArrayType<C, S, T> extends ComplexType<C[], S[], IObservableArray<T
         this.subType = subType
     }
 
-    describe() {
-        return this.subType.describe() + "[]"
-    }
-
-    createNewInstance(childNodes: IChildNodesMap) {
-        return observable.array(convertChildNodesToArray(childNodes), mobxShallow)
-    }
-
-    finalizeNewInstance(node: INode) {
-        const objectNode = node as ObjectNode
-        const type = objectNode.type as ArrayType<any, any, any>
-        const instance = objectNode.storedValue as IObservableArray<any>
-        _getAdministration(instance).dehancer = objectNode.unbox
-        intercept(instance, type.willChange as any)
-        observe(instance, type.didChange)
-    }
-
     instantiate(parent: ObjectNode | null, subpath: string, environment: any, snapshot: S): INode {
-        return createNode(
-            this,
-            parent,
-            subpath,
-            environment,
-            snapshot,
-            this.createNewInstance,
-            this.finalizeNewInstance
-        )
+        return createNode(this, parent, subpath, environment, snapshot)
     }
 
     initializeChildNodes(objNode: ObjectNode, snapshot: S[] = []): IChildNodesMap {
@@ -91,6 +85,23 @@ export class ArrayType<C, S, T> extends ComplexType<C[], S[], IObservableArray<T
         return result
     }
 
+    createNewInstance(
+        node: ObjectNode,
+        childNodes: IChildNodesMap,
+        snapshot: any
+    ): IObservableArray<any> {
+        return observable.array(convertChildNodesToArray(childNodes), mobxShallow)
+    }
+    finalizeNewInstance(node: ObjectNode, instance: IObservableArray<any>): void {
+        _getAdministration(instance).dehancer = node.unbox
+        intercept(instance, this.willChange as any)
+        observe(instance, this.didChange)
+    }
+
+    describe() {
+        return this.subType.describe() + "[]"
+    }
+
     getChildren(node: ObjectNode): INode[] {
         return node.storedValue.slice()
     }
@@ -102,31 +113,40 @@ export class ArrayType<C, S, T> extends ComplexType<C[], S[], IObservableArray<T
     }
 
     willChange(change: IArrayWillChange<any> | IArrayWillSplice<any>): Object | null {
-        const node = getStateTreeNode(change.object as IStateTreeNode)
+        const node = getStateTreeNode(change.object as IStateTreeNode<C, S>)
         node.assertWritable()
         const subType = (node.type as ArrayType<any, any, any>).subType
         const childNodes = node.getChildren()
+        let nodes = null
 
         switch (change.type) {
             case "update":
                 if (change.newValue === change.object[change.index]) return null
-                change.newValue = reconcileArrayChildren(
+                nodes = reconcileArrayChildren(
                     node,
                     subType,
                     [childNodes[change.index]],
                     [change.newValue],
                     [change.index]
-                )[0]
+                )
+                if (!nodes) {
+                    return null
+                }
+                change.newValue = nodes[0]
                 break
             case "splice":
                 const { index, removedCount, added } = change
-                change.added = reconcileArrayChildren(
+                nodes = reconcileArrayChildren(
                     node,
                     subType,
                     childNodes.slice(index, index + removedCount),
                     added,
                     added.map((_, i) => index + i)
                 )
+                if (!nodes) {
+                    return null
+                }
+                change.added = nodes
 
                 // update paths of remaining items
                 for (let i = index + removedCount; i < childNodes.length; i++) {
@@ -145,8 +165,16 @@ export class ArrayType<C, S, T> extends ComplexType<C[], S[], IObservableArray<T
         return node.getChildren().map(childNode => childNode.snapshot)
     }
 
+    processInitialSnapshot(childNodes: IChildNodesMap, snapshot: any): any {
+        const processed = [] as any[]
+        Object.keys(childNodes).forEach(key => {
+            processed.push(childNodes[key].getSnapshot())
+        })
+        return processed
+    }
+
     didChange(this: {}, change: IArrayChange<any> | IArraySplice<any>): void {
-        const node = getStateTreeNode(change.object as IStateTreeNode)
+        const node = getStateTreeNode(change.object as IStateTreeNode<C, S>)
         switch (change.type) {
             case "update":
                 return void node.emitPatch(
@@ -200,7 +228,7 @@ export class ArrayType<C, S, T> extends ComplexType<C[], S[], IObservableArray<T
 
     @action
     applySnapshot(node: ObjectNode, snapshot: any[]): void {
-        typecheck(this, snapshot)
+        typecheckInternal(this, snapshot)
         const target = node.storedValue as IObservableArray<any>
         target.replace(snapshot)
     }
@@ -254,14 +282,13 @@ export class ArrayType<C, S, T> extends ComplexType<C[], S[], IObservableArray<T
  * @param {IType<S, T>} subtype
  * @returns {IComplexType<S[], IObservableArray<T>>}
  */
-export function array<C, S, T>(
-    subtype: IType<C, S, T>
-): IComplexType<ReadonlyArray<C>, ReadonlyArray<S>, IObservableArray<T>> {
+export function array<IT extends IAnyType>(subtype: IT): IArrayType<IT> {
     if (process.env.NODE_ENV !== "production") {
         if (!isType(subtype))
             fail("expected a mobx-state-tree type as first argument, got " + subtype + " instead")
     }
-    return new ArrayType<C, S, T>(subtype.name + "[]", subtype)
+    const ret = new ArrayType<IT>(subtype.name + "[]", subtype)
+    return ret as typeof ret & OptionalProperty
 }
 
 function reconcileArrayChildren<T>(
@@ -270,11 +297,12 @@ function reconcileArrayChildren<T>(
     oldNodes: INode[],
     newValues: T[],
     newPaths: (string | number)[]
-): INode[] {
+): INode[] | null {
     let oldNode: INode,
         newValue: any,
         hasNewNode = false,
-        oldMatch: INode | undefined = undefined
+        oldMatch: INode | undefined = undefined,
+        nothingChanged = true
 
     for (let i = 0; ; i++) {
         hasNewNode = i <= newValues.length - 1
@@ -293,6 +321,7 @@ function reconcileArrayChildren<T>(
             oldNode.die()
             oldNodes.splice(i, 1)
             i--
+            nothingChanged = false
             // there is no old node, create it
         } else if (!oldNode) {
             // check if already belongs to the same parent. if so, avoid pushing item in. only swapping can occur.
@@ -305,6 +334,7 @@ function reconcileArrayChildren<T>(
                 )
             }
             oldNodes.splice(i, 0, valueAsNode(childType, parent, "" + newPaths[i], newValue))
+            nothingChanged = false
             // both are the same, reconcile
         } else if (areSame(oldNode, newValue)) {
             oldNodes[i] = valueAsNode(childType, parent, "" + newPaths[i], newValue, oldNode)
@@ -325,10 +355,11 @@ function reconcileArrayChildren<T>(
                 0,
                 valueAsNode(childType, parent, "" + newPaths[i], newValue, oldMatch)
             )
+            nothingChanged = false
         }
     }
 
-    return oldNodes
+    return nothingChanged ? null : oldNodes
 }
 
 // convert a value to a node at given parent and subpath. attempts to reuse old node if possible and given
@@ -340,7 +371,7 @@ function valueAsNode(
     oldNode?: INode
 ) {
     // ensure the value is valid-ish
-    typecheck(childType, newValue)
+    typecheckInternal(childType, newValue)
 
     // the new value has a MST node
     if (isStateTreeNode(newValue)) {
@@ -371,21 +402,28 @@ function areSame(oldNode: INode, newValue: any) {
         return getStateTreeNode(newValue) === oldNode
     }
     // the provided value is the snapshot of the old node
-    if (isMutable(newValue) && oldNode.snapshot === newValue) return true
+    if (oldNode.snapshot === newValue) return true
     // new value is a snapshot with the correct identifier
     if (
         oldNode instanceof ObjectNode &&
         oldNode.identifier !== null &&
         oldNode.identifierAttribute &&
         isPlainObject(newValue) &&
-        oldNode.identifier === "" + newValue[oldNode.identifierAttribute]
+        oldNode.identifier === "" + newValue[oldNode.identifierAttribute] &&
+        oldNode.type.is(newValue)
     )
         return true
     return false
 }
 
-export function isArrayType<C, S, T>(
-    type: any
-): type is IComplexType<C[], S[], IObservableArray<T>> {
+/**
+ * Returns if a given value represents an array type.
+ *
+ * @export
+ * @template IT
+ * @param {IT} type
+ * @returns {type is IT}
+ */
+export function isArrayType<IT extends IArrayType<any>>(type: IT): type is IT {
     return isType(type) && (type.flags & TypeFlags.Array) > 0
 }

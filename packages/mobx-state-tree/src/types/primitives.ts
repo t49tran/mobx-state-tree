@@ -13,11 +13,18 @@ import {
     typeCheckSuccess,
     typeCheckFailure,
     isType,
-    ObjectNode
+    ObjectNode,
+    IAnyType,
+    IChildNodesMap,
+    isInteger
 } from "../internal"
 
 // TODO: implement CoreType using types.custom ?
-export class CoreType<S, T> extends Type<S, S, T> {
+/**
+ * @internal
+ * @private
+ */
+export class CoreType<C, S, T> extends Type<C, S, T> {
     readonly shouldAttachNode = false
     readonly checker: (value: any) => boolean
     readonly flags: TypeFlags
@@ -40,7 +47,11 @@ export class CoreType<S, T> extends Type<S, S, T> {
     }
 
     instantiate(parent: ObjectNode | null, subpath: string, environment: any, snapshot: T): INode {
-        return createNode(this, parent, subpath, environment, snapshot, this.initializer)
+        return createNode(this, parent, subpath, environment, snapshot)
+    }
+
+    createNewInstance(node: INode, childNodes: IChildNodesMap, snapshot: any): any {
+        return this.initializer(snapshot)
     }
 
     isValidSnapshot(value: any, context: IContext): IValidationResult {
@@ -65,7 +76,7 @@ export class CoreType<S, T> extends Type<S, S, T> {
  * })
  */
 // tslint:disable-next-line:variable-name
-export const string: ISimpleType<string> = new CoreType<string, string>(
+export const string: ISimpleType<string> = new CoreType<string, string, string>(
     "string",
     TypeFlags.String,
     (v: any) => typeof v === "string"
@@ -80,14 +91,33 @@ export const string: ISimpleType<string> = new CoreType<string, string>(
  * @example
  * const Vector = types.model({
  *   x: types.number,
- *   y: 0
+ *   y: 1.5
  * })
  */
 // tslint:disable-next-line:variable-name
-export const number: ISimpleType<number> = new CoreType<number, number>(
+export const number: ISimpleType<number> = new CoreType<number, number, number>(
     "number",
     TypeFlags.Number,
     (v: any) => typeof v === "number"
+)
+
+/**
+ * Creates a type that can only contain an integer value.
+ * This type is used for integer values by default
+ *
+ * @export
+ * @alias types.integer
+ * @example
+ * const Size = types.model({
+ *   width: types.integer,
+ *   height: 10
+ * })
+ */
+// tslint:disable-next-line:variable-name
+export const integer: ISimpleType<number> = new CoreType<number, number, number>(
+    "integer",
+    TypeFlags.Integer,
+    (v: any) => isInteger(v)
 )
 
 /**
@@ -103,7 +133,7 @@ export const number: ISimpleType<number> = new CoreType<number, number>(
  * })
  */
 // tslint:disable-next-line:variable-name
-export const boolean: ISimpleType<boolean> = new CoreType<boolean, boolean>(
+export const boolean: ISimpleType<boolean> = new CoreType<boolean, boolean, boolean>(
     "boolean",
     TypeFlags.Boolean,
     (v: any) => typeof v === "boolean"
@@ -115,7 +145,7 @@ export const boolean: ISimpleType<boolean> = new CoreType<boolean, boolean>(
  * @export
  * @alias types.null
  */
-export const nullType: ISimpleType<null> = new CoreType<null, null>(
+export const nullType: ISimpleType<null> = new CoreType<null, null, null>(
     "null",
     TypeFlags.Null,
     (v: any) => v === null
@@ -127,7 +157,7 @@ export const nullType: ISimpleType<null> = new CoreType<null, null>(
  * @export
  * @alias types.undefined
  */
-export const undefinedType: ISimpleType<undefined> = new CoreType<undefined, undefined>(
+export const undefinedType: ISimpleType<undefined> = new CoreType<undefined, undefined, undefined>(
     "undefined",
     TypeFlags.Undefined,
     (v: any) => v === undefined
@@ -146,7 +176,11 @@ export const undefinedType: ISimpleType<undefined> = new CoreType<undefined, und
  * LogLine.create({ timestamp: new Date() })
  */
 // tslint:disable-next-line:variable-name
-export const DatePrimitive: IType<number, number, Date> = new CoreType<number, Date>(
+export const DatePrimitive: IType<number | Date, number, Date> = new CoreType<
+    number | Date,
+    number,
+    Date
+>(
     "Date",
     TypeFlags.Date,
     (v: any) => typeof v === "number" || v instanceof Date,
@@ -156,12 +190,16 @@ export const DatePrimitive: IType<number, number, Date> = new CoreType<number, D
     return node.storedValue.getTime()
 }
 
+/**
+ * @internal
+ * @private
+ */
 export function getPrimitiveFactoryFromValue(value: any): ISimpleType<any> {
     switch (typeof value) {
         case "string":
             return string
         case "number":
-            return number
+            return number // In the future, isInteger(value) ? integer : number would be interesting, but would be too breaking for now
         case "boolean":
             return boolean
         case "object":
@@ -170,10 +208,29 @@ export function getPrimitiveFactoryFromValue(value: any): ISimpleType<any> {
     return fail("Cannot determine primitive type from value " + value)
 }
 
-export function isPrimitiveType(type: any): type is CoreType<any, any> {
+/**
+ * Returns if a given value represents a primitive type.
+ *
+ * @export
+ * @template IT
+ * @param {IT} type
+ * @returns {type is IT}
+ */
+export function isPrimitiveType<
+    IT extends
+        | ISimpleType<string>
+        | ISimpleType<number>
+        | ISimpleType<boolean>
+        | typeof DatePrimitive
+>(type: IT): type is IT {
     return (
         isType(type) &&
-        (type.flags & (TypeFlags.String | TypeFlags.Number | TypeFlags.Boolean | TypeFlags.Date)) >
+        (type.flags &
+            (TypeFlags.String |
+                TypeFlags.Number |
+                TypeFlags.Integer |
+                TypeFlags.Boolean |
+                TypeFlags.Date)) >
             0
     )
 }

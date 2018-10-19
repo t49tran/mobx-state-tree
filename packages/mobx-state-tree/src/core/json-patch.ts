@@ -3,21 +3,29 @@ import { fail } from "../internal"
 // https://tools.ietf.org/html/rfc6902
 // http://jsonpatch.com/
 
-export type IJsonPatch = {
+export interface IJsonPatch {
     op: "replace" | "add" | "remove"
     path: string
     value?: any
 }
 
-export type IReversibleJsonPatch = IJsonPatch & {
+export interface IReversibleJsonPatch extends IJsonPatch {
     oldValue: any // This goes beyond JSON-patch, but makes sure each patch can be inverse applied
 }
 
+/**
+ * @internal
+ * @private
+ */
 export function splitPatch(patch: IReversibleJsonPatch): [IJsonPatch, IJsonPatch] {
     if (!("oldValue" in patch)) fail(`Patches without \`oldValue\` field cannot be inversed`)
     return [stripPatch(patch), invertPatch(patch)]
 }
 
+/**
+ * @internal
+ * @private
+ */
 export function stripPatch(patch: IReversibleJsonPatch): IJsonPatch {
     // strips `oldvalue` information from the patch, so that it becomes a patch conform the json-patch spec
     // this removes the ability to undo the patch

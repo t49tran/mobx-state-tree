@@ -3,7 +3,6 @@ import {
     INode,
     createNode,
     Type,
-    IType,
     TypeFlags,
     isType,
     IContext,
@@ -11,9 +10,14 @@ import {
     typeCheckFailure,
     ObjectNode,
     ModelType,
-    typeCheckSuccess
+    typeCheckSuccess,
+    ISimpleType
 } from "../../internal"
 
+/**
+ * @internal
+ * @private
+ */
 export class IdentifierType extends Type<string, string, string> {
     readonly shouldAttachNode = false
     readonly flags = TypeFlags.Identifier
@@ -60,6 +64,10 @@ export class IdentifierType extends Type<string, string, string> {
     }
 }
 
+/**
+ * @internal
+ * @private
+ */
 export class IdentifierNumberType extends IdentifierType {
     constructor() {
         super()
@@ -117,7 +125,7 @@ export class IdentifierNumberType extends IdentifierType {
  * @template T
  * @returns {IType<T, T>}
  */
-export const identifier: IType<string, string, string> = new IdentifierType()
+export const identifier: ISimpleType<string> = new IdentifierType()
 
 /**
  * Similar to `types.identifier`, but `identifierNumber` will serialize from / to a number when applying snapshots
@@ -133,8 +141,18 @@ export const identifier: IType<string, string, string> = new IdentifierType()
  * @template T
  * @returns {IType<T, T>}
  */
-export const identifierNumber: IType<number, number, number> = new IdentifierNumberType() as any
+export const identifierNumber: ISimpleType<number> = new IdentifierNumberType() as any
 
-export function isIdentifierType(type: any): type is IdentifierType | IdentifierNumberType {
+/**
+ * Returns if a given value represents an identifier type.
+ *
+ * @export
+ * @template IT
+ * @param {IT} type
+ * @returns {type is IT}
+ */
+export function isIdentifierType<IT extends typeof identifier | typeof identifierNumber>(
+    type: IT
+): type is IT {
     return isType(type) && (type.flags & TypeFlags.Identifier) > 0
 }

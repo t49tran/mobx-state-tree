@@ -13,8 +13,12 @@ import {
     typeCheckFailure,
     fail,
     ObjectNode,
-    IStateTreeNode,
-    IAnyType
+    IAnyType,
+    ExtractT,
+    IComplexType,
+    IAnyStateTreeNode,
+    IAnyModelType,
+    IAnyComplexType
 } from "../../internal"
 import { computed } from "mobx"
 
@@ -50,6 +54,10 @@ class StoredReference {
     }
 }
 
+/**
+ * @internal
+ * @private
+ */
 export abstract class BaseReferenceType<T> extends Type<string | number | T, string | number, T> {
     readonly shouldAttachNode = false
     readonly flags = TypeFlags.Reference
@@ -77,6 +85,10 @@ export abstract class BaseReferenceType<T> extends Type<string | number | T, str
     }
 }
 
+/**
+ * @internal
+ * @private
+ */
 export class IdentifierReferenceType<T> extends BaseReferenceType<T> {
     constructor(targetType: IType<any, any, T>) {
         super(targetType)
@@ -137,6 +149,10 @@ export class IdentifierReferenceType<T> extends BaseReferenceType<T> {
     }
 }
 
+/**
+ * @internal
+ * @private
+ */
 export class CustomReferenceType<T> extends BaseReferenceType<T> {
     constructor(targetType: IType<any, any, T>, private readonly options: ReferenceOptions<T>) {
         super(targetType)
@@ -181,15 +197,14 @@ export class CustomReferenceType<T> extends BaseReferenceType<T> {
     }
 }
 
-export type ReferenceOptions<T> = {
-    get(identifier: string | number, parent: IStateTreeNode | null): T
-    set(value: T, parent: IStateTreeNode | null): string | number
+export interface ReferenceOptions<T> {
+    get(identifier: string | number, parent: IAnyStateTreeNode | null): T
+    set(value: T, parent: IAnyStateTreeNode | null): string | number
 }
 
-export function reference<T>(
-    factory: IType<any, any, T>,
-    options?: ReferenceOptions<T>
-): IType<string | number | T, string | number, T>
+export interface IReferenceType<IR extends IAnyComplexType>
+    extends IComplexType<string | number | ExtractT<IR>, string | number, ExtractT<IR>> {}
+
 /**
  * Creates a reference to another type, which should have defined an identifier.
  * See also the [reference and identifiers](https://github.com/mobxjs/mobx-state-tree#references-and-identifiers) section.
@@ -197,7 +212,10 @@ export function reference<T>(
  * @export
  * @alias types.reference
  */
-export function reference<T>(subType: IType<any, any, T>, options?: ReferenceOptions<T>): any {
+export function reference<IT extends IAnyComplexType>(
+    subType: IT,
+    options?: ReferenceOptions<ExtractT<IT>>
+): IReferenceType<IT> {
     // check that a type is given
     if (process.env.NODE_ENV !== "production") {
         if (!isType(subType))
@@ -205,10 +223,19 @@ export function reference<T>(subType: IType<any, any, T>, options?: ReferenceOpt
         if (arguments.length === 2 && typeof arguments[1] === "string")
             fail("References with base path are no longer supported. Please remove the base path.")
     }
-    if (options) return new CustomReferenceType(subType, options)
+    // as any because getValue might actually return undefined if the node is not alive
+    if (options) return new CustomReferenceType(subType, options) as any
     else return new IdentifierReferenceType(subType)
 }
 
-export function isReferenceType(type: any): type is BaseReferenceType<any> {
+/**
+ * Returns if a given value represents a reference type.
+ *
+ * @export
+ * @template IT
+ * @param {IT} type
+ * @returns {type is IT}
+ */
+export function isReferenceType<IT extends IReferenceType<any>>(type: IT): type is IT {
     return (type.flags & TypeFlags.Reference) > 0
 }
